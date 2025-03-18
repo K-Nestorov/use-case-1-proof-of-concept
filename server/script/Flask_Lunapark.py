@@ -151,53 +151,53 @@ def get_employee_by_id(employee_id):
         cursor.close()
         connection.close()
 
-@app.route("/sales")
-def get_sales():
+@app.route("/sales", defaults={"filter_today": False})
+@app.route("/sales/today", defaults={"filter_today": True})
+def get_sales(filter_today):
     connection = get_connection()
     cursor = connection.cursor()
-#maham WHERE TO_DATE(VALID_DATE) = CURRENT_DATE; sled tva otmetka za today 
+
     try:
-        cursor.execute("""
-                SELECT COUNT(*) FROM PUBLIC.Tickets 
-                
-                """)
+    
+        ticket_query = "SELECT COUNT(*) FROM PUBLIC.Tickets"
+        attraction_query = """
+            SELECT A.NAME, COUNT(*)
+            FROM PUBLIC.AttractionVisits AV
+            JOIN PUBLIC.Attractions A ON AV.attraction_id = A.ATTRACTION_ID
+            GROUP BY A.NAME
+        """
+        restaurant_query = """
+            SELECT R.restaurant_name, M.dish_name, SUM(P.quantity) AS total_quantity, SUM(P.total_price) AS total_sales
+            FROM PUBLIC.Purchases P
+            JOIN PUBLIC.Restaurants R ON P.restaurant_id = R.restaurant_id
+            JOIN PUBLIC.Menu M ON P.dish_id = M.dish_id
+        """
+        if filter_today:
+            ticket_query += " WHERE CAST(VALID_DATE AS DATE) = CURRENT_DATE"
+            restaurant_query += " WHERE CAST(P.purchase_date AS DATE) = CURRENT_DATE"
+
+        restaurant_query += " GROUP BY R.restaurant_name, M.dish_name ORDER BY R.restaurant_name"
+
+        cursor.execute(ticket_query)
         visitors_today = cursor.fetchone()[0]
-        cursor.execute("""
-                SELECT A.NAME, COUNT(*) 
-                FROM PUBLIC.AttractionVisits AV
-                JOIN PUBLIC.Attractions A ON AV.attraction_id = A.ATTRACTION_ID
-                
-                GROUP BY A.NAME;
-                """)
+
+        cursor.execute(attraction_query)
         attractions_today = cursor.fetchall()
-        cursor.execute("""
-                SELECT R.restaurant_name, M.dish_name, SUM(P.quantity) AS total_quantity, SUM(P.total_price) AS total_sales
-                FROM PUBLIC.Purchases P
-                JOIN PUBLIC.Restaurants R ON P.restaurant_id = R.restaurant_id
-                JOIN PUBLIC.Menu M ON P.dish_id = M.dish_id
-              
-                GROUP BY R.restaurant_name, M.dish_name
-                ORDER BY R.restaurant_name;
-                """)
+
+        cursor.execute(restaurant_query)
         restaurant_sales = cursor.fetchall()
 
-        if visitors_today:
-            all_visitors_data = []
-
-            visitors_info = {
-                "visitors today": visitors_today,
-                "attractions": attractions_today,
-                "restorans": restaurant_sales
-            }
-            all_visitors_data.append(visitors_info)
-
-            return jsonify(all_visitors_data), 200
-        else:
-            return jsonify({"error": "No visitors found"}), 404
+        all_visitors_data = [{
+            "visitors": visitors_today,
+            "attractions": attractions_today,
+            "restaurants": restaurant_sales
+        }]
+        
+        return jsonify(all_visitors_data), 200
 
     except Exception as e:
+        return jsonify({"error": "Failed to fetch data", "details": str(e)}), 500
 
-        return jsonify({"error": "Failed to fetch  data"}), 500
     finally:
         cursor.close()
         connection.close()
@@ -414,11 +414,11 @@ def get_finalncial_byid(TRANSACTION_ID):
 
             return jsonify(all_employees_data), 200
         else:
-            return jsonify({"error": "No Employees found"}), 404
+            return jsonify({"error": "No transactions found"}), 404
 
     except Exception as e:
         print(f"Error executing query: {e}")
-        return jsonify({"error": "Failed to fetch employees data"}), 500
+        return jsonify({"error": "Failed to fetch transactions data"}), 500
     finally:
         cursor.close()
         connection.close()  
@@ -427,35 +427,52 @@ def get_finalncial_byid(TRANSACTION_ID):
 def get_visitor():
     connection = get_connection()  
     cursor = connection.cursor()
+    
+    first_name = request.args.get("first_name")  
+    last_name = request.args.get("last_name")  
+    
     try:
+        query = "SELECT * FROM Public.VISITORS"
+        params = []
+        
+        conditions = []
+        if first_name:
+            conditions.append("FIRST_NAME ILIKE %s")
+            params.append(f"%{first_name}%")
+        
+        if last_name:
+            conditions.append("LAST_NAME ILIKE %s")
+            params.append(f"%{last_name}%")
+        
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        
+        cursor.execute(query, tuple(params))
+        visitors_data = cursor.fetchall()
 
-        cursor.execute("""SELECT * FROM Public.VISITORS""")
-        employees_data = cursor.fetchall() 
+        if visitors_data:      
+            all_visitors_data = []
 
-        if employees_data:      
-            all_employees_data = []
-
-            for employees in employees_data:
-                employees = {
-                    "VISITOR_ID": employees[0],  
-                    "FIRST_NAME": employees[1], 
-                    "LAST_NAME": employees[2],
-                    "REGISTRATION_DATE": employees[3],
-                    "ACCESS_CARD_NUMBER": employees[4],
-                  
+            for visitor in visitors_data:
+                visitor_info = {
+                    "VISITOR_ID": visitor[0],  
+                    "FIRST_NAME": visitor[1], 
+                    "LAST_NAME": visitor[2],
+                    "REGISTRATION_DATE": visitor[3],
+                    "ACCESS_CARD_NUMBER": visitor[4],
                 }
-                all_employees_data.append(employees)
+                all_visitors_data.append(visitor_info)
 
-            return jsonify(all_employees_data), 200
+            return jsonify(all_visitors_data), 200
         else:
-            return jsonify({"error": "No Employees found"}), 404
+            return jsonify({"error": "No visitors found"}), 404
 
     except Exception as e:
         print(f"Error executing query: {e}")
-        return jsonify({"error": "Failed to fetch employees data"}), 500
+        return jsonify({"error": "Failed to fetch visitors data"}), 500
     finally:
         cursor.close()
-        connection.close() 
+        connection.close()
 @app.route("/visitor/<int:VISITOR_ID>")
 def get_visitor_byid(VISITOR_ID):
     connection = get_connection()  
@@ -494,11 +511,19 @@ def get_visitor_byid(VISITOR_ID):
 def get_event():
     connection = get_connection()  
     cursor = connection.cursor()
+    
+    event_name = request.args.get("name")  
+    
     try:
-        cursor.execute("""SELECT * FROM Public.EVENTS""")
+        query = "SELECT * FROM Public.EVENTS"
+        params = ()
+        
+        if event_name:
+            query += " WHERE EVENT_NAME ILIKE %s"
+            params = (f"%{event_name}%",)
+        
+        cursor.execute(query, params)
         events_data = cursor.fetchall()
-
-
 
         if events_data:
             all_events_data = []
@@ -574,7 +599,7 @@ def create_ticket():
     valid_date = request.args.get("valid_date")
 
     return jsonify({
-        "message": "Ticket created successfully!",
+       
         "ticket": {
             "visitor_id": visitor_id,
             "purchase_date": purchase_date,
